@@ -23,10 +23,12 @@ def cross_entropy_loss(logits, labels):
 
 def load_wavs(wav_dir, sr):
     wavs = list()
-    for file in os.listdir(wav_dir):
-        file_path = os.path.join(wav_dir, file)
-        wav, _ = librosa.load(file_path, sr=sr, mono=True)
-        # wav = wav.astype(np.float64)
+    for file in wav_dir:
+        # file_path = os.path.join(wav_dir, file)
+        # print(os.path.isfile(file_path))
+        # print("----> load wavs: ", file)
+        wav, _ = librosa.load(file, sr=sr, mono=True)
+        wav = wav.astype(np.float64)
         wavs.append(wav)
 
     return wavs

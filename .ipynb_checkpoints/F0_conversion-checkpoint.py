@@ -1,0 +1,284 @@
+{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import tensorflow as tf"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### Input Data: .wav -> Pitch contour (f0s), Harmonic spectral envelope (sps), Aperiodic spectral envelope (aps)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import numpy as np\n",
+    "import os\n",
+    "import time\n",
+    "import argparse\n",
+    "import librosa"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "from utils import *\n",
+    "from ops import *"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 4,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import librosa.display\n",
+    "from IPython.display import Audio\n",
+    "import matplotlib.pyplot as plt"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 5,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "%matplotlib inline"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 6,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "random_seed = 0\n",
+    "np.random.seed(random_seed)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Module: F0"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 7,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "class F0(object):\n",
+    "    def __init__(self, sess, folder='S01/', source='ang', target='neu'):\n",
+    "        \n",
+    "        self.train_A_dir = './../../../Database/Emotion/' + folder + source + '_' + target + '/' + source\n",
+    "        self.train_B_dir = './../../../Database/Emotion/' + folder + source + '_' + target + '/' + target\n",
+    "        self.validation_A_dir = './../../../Database/Emotion/' + folder + source + '_' + target + '/' + 'val_' + source\n",
+    "        self.validation_B_dir = './../../../Database/Emotion/' + folder + source + '_' + target + '/' + 'val_' + target\n",
+    "\n",
+    "        self.audio_len = 128    # = n_frames, time_length\n",
+    "        self.audio_ch = 24      # = num_mcep, num_features\n",
+    "               \n",
+    "        self.dataset_name = source + '_' + target\n",
+    "        self.model_name = 'C'\n",
+    "        self.gan_type = 'lsgan'\n",
+    "        self.log_dir = \"logs/\" # + datetime.now().strftime(\"%Y%m%d-%H%M%S\")\n",
+    "        self.sample_dir = 'samples'\n",
+    "        self.checkpoint_dir = 'checkpoint'\n",
+    "        self.A2B_dir = 'F0_results/' + source + '2' + target\n",
+    "        self.B2A_dir = 'F0_results/' + target + '2' + source\n",
+    "        \n",
+    "        self.sess = sess\n",
+    "        \n",
+    "        self.sampling_rate = 16000\n",
+    "        self.frame_period = 5.0\n",
+    "        self.num_mcep = 24\n",
+    "        \n",
+    "\n",
+    "    def data_prepare(self, f0s_A, f0s_B, coded_sps_norm_A, coded_sps_norm_B):\n",
+    "        \n",
+    "        train_data_A = sample_train_data03(sps=list(coded_sps_norm_A), f0s=list(f0s_A), n_frames=self.audio_len)\n",
+    "        train_data_B = sample_train_data03(sps=list(coded_sps_norm_B), f0s=list(f0s_B), n_frames=self.audio_len)\n",
+    "\n",
+    "        minlen = min(len(train_data_A), len(train_data_B))\n",
+    "        np.random.shuffle(train_data_A)\n",
+    "        np.random.shuffle(train_data_B)\n",
+    "        train_data_A = np.array(train_data_A[0:minlen])\n",
+    "        train_data_B = np.array(train_data_B[0:minlen])\n",
+    "\n",
+    "        return train_data_A, train_data_B\n",
+    "\n",
+    "\n",
+    "    def test(self):\n",
+    "        # initialize all variables\n",
+    "        tf.global_variables_initializer().run()\n",
+    "    \n",
+    "        # check result_dir\n",
+    "        check_folder(self.A2B_dir)\n",
+    "        check_folder(self.B2A_dir)\n",
+    "        \n",
+    "        # Get statistic from train_A, train_B\n",
+    "        _, _, log_f0s_mean_A, log_f0s_std_A, coded_sps_A_mean, coded_sps_A_std = vocoder_extract(self.train_A_dir)\n",
+    "        _, _, log_f0s_mean_B, log_f0s_std_B, coded_sps_B_mean, coded_sps_B_std = vocoder_extract(self.train_B_dir) \n",
+    "        print('std_log_src:', log_f0s_std_A, 'std_log_target', log_f0s_std_B)\n",
+    "        \n",
+    "        \n",
+    "        # A2B\n",
+    "        test_files_A = os.listdir(self.validation_A_dir)\n",
+    "        for i in range(len(test_files_A)):\n",
+    "            file = test_files_A[i]\n",
+    "            filepath = os.path.join(self.validation_A_dir, file)\n",
+    "            wav, _ = librosa.load(filepath, sr = self.sampling_rate, mono = True)\n",
+    "            wav = wav_padding(wav = wav, sr = self.sampling_rate, frame_period = self.frame_period, multiple = 4)\n",
+    "            f0, timeaxis, sp, ap = world_decompose(wav = wav, fs = self.sampling_rate, frame_period = self.frame_period)\n",
+    "            \n",
+    "            # f0 conversion\n",
+    "            f0_converted = pitch_conversion(f0 = f0, mean_log_src = log_f0s_mean_A, std_log_src = log_f0s_std_A, mean_log_target = log_f0s_mean_B, std_log_target = log_f0s_std_B)\n",
+    "\n",
+    "            # sp normalization\n",
+    "            coded_sp = world_encode_spectral_envelop(sp = sp, fs = self.sampling_rate, dim = self.num_mcep)\n",
+    "            coded_sp_transposed = coded_sp.T\n",
+    "            coded_sp_norm = (coded_sp_transposed - coded_sps_A_mean) / coded_sps_A_std\n",
+    "                       \n",
+    "            coded_sp_converted = coded_sp_norm * coded_sps_B_std + coded_sps_B_mean\n",
+    "            coded_sp_converted = coded_sp_converted.T\n",
+    "            coded_sp_converted = np.ascontiguousarray(coded_sp_converted)\n",
+    "            decoded_sp_converted = world_decode_spectral_envelop(coded_sp = coded_sp_converted, fs = self.sampling_rate)\n",
+    "            wav_transformed = world_speech_synthesis(f0 = f0_converted, decoded_sp = decoded_sp_converted, ap = ap, fs = self.sampling_rate, frame_period = self.frame_period)\n",
+    "            librosa.output.write_wav(os.path.join(self.A2B_dir, os.path.basename(file)), wav_transformed, self.sampling_rate)\n",
+    "            \n",
+    "            print('converting test samples A2B: [%d/%d]' %(i+1, len(test_files_A)), end='\\r')\n",
+    "        \n",
+    "        # B2A\n",
+    "        test_files_B = os.listdir(self.validation_B_dir)\n",
+    "        for i in range(len(test_files_B)):\n",
+    "            file = test_files_B[i]\n",
+    "            filepath = os.path.join(self.validation_B_dir, file)\n",
+    "            wav, _ = librosa.load(filepath, sr = self.sampling_rate, mono = True)\n",
+    "            wav = wav_padding(wav = wav, sr = self.sampling_rate, frame_period = self.frame_period, multiple = 4)\n",
+    "            f0, timeaxis, sp, ap = world_decompose(wav = wav, fs = self.sampling_rate, frame_period = self.frame_period)\n",
+    "            \n",
+    "            # f0 conversion\n",
+    "            f0_converted = pitch_conversion(f0 = f0, mean_log_src = log_f0s_mean_B, std_log_src = log_f0s_std_B, mean_log_target = log_f0s_mean_A, std_log_target = log_f0s_std_A)\n",
+    "\n",
+    "            # sp normalization\n",
+    "            coded_sp = world_encode_spectral_envelop(sp = sp, fs = self.sampling_rate, dim = self.num_mcep)\n",
+    "            coded_sp_transposed = coded_sp.T\n",
+    "            coded_sp_norm = (coded_sp_transposed - coded_sps_B_mean) / coded_sps_B_std\n",
+    "            \n",
+    "            coded_sp_converted = coded_sp_norm * coded_sps_A_std + coded_sps_A_mean\n",
+    "            coded_sp_converted = coded_sp_converted.T\n",
+    "            coded_sp_converted = np.ascontiguousarray(coded_sp_converted)\n",
+    "            decoded_sp_converted = world_decode_spectral_envelop(coded_sp = coded_sp_converted, fs = self.sampling_rate)\n",
+    "            wav_transformed = world_speech_synthesis(f0 = f0_converted, decoded_sp = decoded_sp_converted, ap = ap, fs = self.sampling_rate, frame_period = self.frame_period)\n",
+    "            librosa.output.write_wav(os.path.join(self.B2A_dir, os.path.basename(file)), wav_transformed, self.sampling_rate)\n",
+    "            \n",
+    "            print('converting test samples B2A: [%d/%d]' %(i+1, len(test_files_B)), end='\\r')\n",
+    "            \n",
+    "        print(\" [*] Testing finished!\")\n",
+    "        \n",
+    "        \n",
+    "    @property\n",
+    "    def model_dir(self):\n",
+    "        return \"{}_{}_{}\".format(self.model_name, self.dataset_name, self.gan_type)\n",
+    "    \n",
+    "    \n",
+    "    def load(self, checkpoint_dir):\n",
+    "        import re\n",
+    "        print(\" [*] Reading checkpoints...\")\n",
+    "        checkpoint_dir = os.path.join(checkpoint_dir, self.model_dir)\n",
+    "\n",
+    "        ckpt = tf.train.get_checkpoint_state(checkpoint_dir)\n",
+    "        if ckpt and ckpt.model_checkpoint_path:\n",
+    "            ckpt_name = os.path.basename(ckpt.model_checkpoint_path)\n",
+    "            self.saver.restore(self.sess, os.path.join(checkpoint_dir, ckpt_name))\n",
+    "            counter = int(next(re.finditer(\"(\\d+)(?!.*\\d)\", ckpt_name)).group(0))\n",
+    "            print(\" [*] Success to read {}\".format(ckpt_name))\n",
+    "            return True, counter\n",
+    "        else:\n",
+    "            print(\" [*] Failed to find a checkpoint\")\n",
+    "            return False, 0\n",
+    "        \n",
+    "        \n",
+    "    def save(self, checkpoint_dir, step):\n",
+    "        checkpoint_dir = os.path.join(checkpoint_dir, self.model_dir)\n",
+    "\n",
+    "        if not os.path.exists(checkpoint_dir):\n",
+    "            os.makedirs(checkpoint_dir)\n",
+    "\n",
+    "        self.saver.save(self.sess, os.path.join(checkpoint_dir, self.model_name + '.model'), global_step=step)        \n",
+    "        "
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Train"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 8,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "std_log_src: 0.3504122157244266 std_log_target 0.2549442639021922\n",
+      " [*] Testing finished!s B2A: [26/26]\n"
+     ]
+    }
+   ],
+   "source": [
+    "with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:\n",
+    "    model = F0(sess, folder='S05/', source='hap', target='sad')\n",
+    "    model.test()\n",
+    "    "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3 (ipykernel)",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.8.10"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 2
+}

@@ -1,0 +1,2 @@
+model_checkpoint_path: "hap2neu.ckpt"
+all_model_checkpoint_paths: "hap2neu.ckpt"

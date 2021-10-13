@@ -1,0 +1,4 @@
+model_checkpoint_path: "EmoMUNIT.model-31"
+all_model_checkpoint_paths: "EmoMUNIT.model-11"
+all_model_checkpoint_paths: "EmoMUNIT.model-21"
+all_model_checkpoint_paths: "EmoMUNIT.model-31"
